@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import serverlessExpress from "@vendia/serverless-express";
+import serverlessHttp from "serverless-http";
 import express from "express";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -29,7 +29,7 @@ const app = express();
 app.use(express.json());
 
 app.get("/", (_req, res) => {
-  res.json({ name: "nifty-mcp-server", status: "ok" });
+  res.json({ name: "nifty-mcp-server", status: "ok", token_configured: !!NIFTY_API_TOKEN });
 });
 
 app.post("/mcp", async (req, res) => {
@@ -42,4 +42,4 @@ app.post("/mcp", async (req, res) => {
   await transport.handleRequest(req, res, req.body);
 });
 
-export const handler = serverlessExpress({ app });
+export const handler = serverlessHttp(app);
