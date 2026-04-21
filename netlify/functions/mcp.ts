@@ -152,16 +152,22 @@ app.use("/mcp", (req, _res, next) => {
   next();
 });
 
-// GET is public — Claude.ai probes this before it has a token
+// GET /mcp — Claude.ai probes this first; return 401 with WWW-Authenticate so it
+// knows where to do OAuth before attempting to connect
 app.get("/mcp", (_req, res) => {
-  res.json({ name: "nifty-mcp-server", status: "ok" });
+  res
+    .set("WWW-Authenticate", `Bearer realm="${BASE_URL}", resource_metadata_url="${BASE_URL}/.well-known/oauth-authorization-server"`)
+    .status(401)
+    .json({ error: "unauthorized", resource_metadata_url: `${BASE_URL}/.well-known/oauth-authorization-server` });
 });
 
 // POST requires a valid JWT
 app.post("/mcp", async (req, res) => {
   const authHeader = req.headers["authorization"];
+  const wwwAuth = `Bearer realm="${BASE_URL}", resource_metadata_url="${BASE_URL}/.well-known/oauth-authorization-server"`;
+
   if (!authHeader?.startsWith("Bearer ")) {
-    res.status(401).json({ error: "Missing bearer token" });
+    res.set("WWW-Authenticate", wwwAuth).status(401).json({ error: "Missing bearer token" });
     return;
   }
 
@@ -170,7 +176,7 @@ app.post("/mcp", async (req, res) => {
     const payload = jwt.verify(authHeader.slice(7), JWT_SECRET) as { niftyToken: string };
     niftyToken = payload.niftyToken;
   } catch {
-    res.status(401).json({ error: "Invalid or expired token" });
+    res.set("WWW-Authenticate", wwwAuth).status(401).json({ error: "Invalid or expired token" });
     return;
   }
 
