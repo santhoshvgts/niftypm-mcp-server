@@ -43,7 +43,7 @@ app.get("/.well-known/oauth-protected-resource", (_req, res) => {
 });
 
 // ── OAuth discovery (RFC8414) ─────────────────────────────────────────────────
-app.get("/.well-known/oauth-authorization-server", (_req, res) => {
+app.get("/.well-known/oauth-protected-resource", (_req, res) => {
   res.json({
     issuer: BASE_URL,
     authorization_endpoint: `${BASE_URL}/authorize`,
@@ -175,7 +175,7 @@ app.use("/mcp", (req, _res, next) => {
 // knows where to do OAuth before attempting to connect
 app.get("/mcp", (_req, res) => {
   res
-    .set("WWW-Authenticate", `Bearer realm="${BASE_URL}", resource_metadata_url="${BASE_URL}/.well-known/oauth-authorization-server"`)
+    .set("WWW-Authenticate", `Bearer realm="${BASE_URL}", resource_metadata_url="${BASE_URL}/.well-known/oauth-protected-resource"`)
     .status(401)
     .json({ error: "unauthorized", resource_metadata_url: `${BASE_URL}/.well-known/oauth-authorization-server` });
 });
@@ -183,7 +183,7 @@ app.get("/mcp", (_req, res) => {
 // POST requires a valid JWT
 app.post("/mcp", async (req, res) => {
   const authHeader = req.headers["authorization"];
-  const wwwAuth = `Bearer realm="${BASE_URL}", resource_metadata_url="${BASE_URL}/.well-known/oauth-authorization-server"`;
+  const wwwAuth = `Bearer realm="${BASE_URL}", resource_metadata_url="${BASE_URL}/.well-known/oauth-protected-resource"`;
 
   if (!authHeader?.startsWith("Bearer ")) {
     res.set("WWW-Authenticate", wwwAuth).status(401).json({ error: "Missing bearer token" });
