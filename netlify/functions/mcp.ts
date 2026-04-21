@@ -68,6 +68,11 @@ app.get("/oauth/authorize", (req, res) => {
   res.redirect(niftyAuthUrl.toString());
 });
 
+// ── Health check ─────────────────────────────────────────────────────────────
+app.get("/", (_req, res) => {
+  res.json({ name: "nifty-mcp-server", status: "ok" });
+});
+
 // ── Step 2: Nifty redirects here after user approves ─────────────────────────
 app.get("/oauth/callback", async (req, res) => {
   const { code, state, error } = req.query as Record<string, string>;
@@ -140,10 +145,6 @@ app.post("/oauth/token", (req, res) => {
   });
 });
 
-// ── Health check ─────────────────────────────────────────────────────────────
-app.get("/", (_req, res) => {
-  res.json({ name: "nifty-mcp-server", status: "ok" });
-});
 
 // ── MCP endpoint ─────────────────────────────────────────────────────────────
 app.use("/mcp", (req, _res, next) => {
