@@ -20,9 +20,6 @@ const NIFTY_TOKEN_URL = "https://openapi.niftypm.com/oauth/token";
 const NIFTY_SCOPES = "file,doc,message,project,task,member,label,milestone,task_group,subtask,subteam,time_tracking";
 const REDIRECT_URI = `${BASE_URL}/oauth/callback`;
 
-// In-memory store: auth_code → nifty_access_token (cleared after use)
-const pendingCodes = new Map<string, string>();
-
 function buildMcpServer(niftyToken: string): McpServer {
   const server = new McpServer({ name: "nifty-mcp-server", version: "1.0.0" });
   const getClient = () => createNiftyClient(niftyToken);
@@ -49,19 +46,24 @@ app.get("/.well-known/oauth-authorization-server", (_req, res) => {
   });
 });
 
-// ── Step 1: Redirect to Nifty's real OAuth authorize page ─────────────────────
+// ── Step 1: Redirect to Nifty's real OAuth authorize page ────────────────────
+// Encode Claude's redirect_uri + state into a signed JWT passed as Nifty's state param.
+// No in-memory storage needed — survives across serverless instances.
 app.get("/oauth/authorize", (req, res) => {
-  const { redirect_uri, state, code_challenge, code_challenge_method } = req.query as Record<string, string>;
+  const { redirect_uri, state } = req.query as Record<string, string>;
 
-  // Store Claude's redirect_uri + state in a short-lived param passed through Nifty's state
-  const proxyState = Buffer.from(JSON.stringify({ redirect_uri, state, code_challenge, code_challenge_method })).toString("base64url");
+  const stateToken = jwt.sign(
+    { claudeRedirectUri: redirect_uri, claudeState: state },
+    JWT_SECRET,
+    { expiresIn: "10m" }
+  );
 
   const niftyAuthUrl = new URL("https://nifty.pm/authorize");
   niftyAuthUrl.searchParams.set("response_type", "code");
   niftyAuthUrl.searchParams.set("client_id", NIFTY_CLIENT_ID);
   niftyAuthUrl.searchParams.set("redirect_uri", REDIRECT_URI);
   niftyAuthUrl.searchParams.set("scope", NIFTY_SCOPES);
-  niftyAuthUrl.searchParams.set("state", proxyState);
+  niftyAuthUrl.searchParams.set("state", stateToken);
 
   res.redirect(niftyAuthUrl.toString());
 });
@@ -71,21 +73,21 @@ app.get("/oauth/callback", async (req, res) => {
   const { code, state, error } = req.query as Record<string, string>;
 
   if (error || !code || !state) {
-    return res.status(400).send(`Authorization failed: ${error || "missing code"}`);
+    return res.status(400).send(`Authorization failed: ${error || "missing code or state"}`);
   }
 
+  // Decode Claude's original redirect_uri + state from our signed JWT
   let claudeRedirectUri: string;
   let claudeState: string;
-
   try {
-    const parsed = JSON.parse(Buffer.from(state, "base64url").toString());
-    claudeRedirectUri = parsed.redirect_uri;
-    claudeState = parsed.state;
-  } catch {
-    return res.status(400).send("Invalid state parameter");
+    const payload = jwt.verify(state, JWT_SECRET) as { claudeRedirectUri: string; claudeState: string };
+    claudeRedirectUri = payload.claudeRedirectUri;
+    claudeState = payload.claudeState;
+  } catch (err) {
+    return res.status(400).send("Invalid or expired state token");
   }
 
-  // Exchange Nifty code for Nifty access token
+  // Exchange Nifty's code for a Nifty access token
   let niftyAccessToken: string;
   try {
     const response = await axios.post(NIFTY_TOKEN_URL, new URLSearchParams({
@@ -99,15 +101,12 @@ app.get("/oauth/callback", async (req, res) => {
     niftyAccessToken = response.data.access_token;
   } catch (err: any) {
     console.error("Nifty token exchange failed:", err?.response?.data || err.message);
-    return res.status(500).send("Failed to exchange token with Nifty");
+    return res.status(500).send(`Failed to exchange token with Nifty: ${JSON.stringify(err?.response?.data)}`);
   }
 
-  // Issue our own short-lived code that maps to the Nifty token
-  const ourCode = crypto.randomUUID();
-  pendingCodes.set(ourCode, niftyAccessToken);
-  setTimeout(() => pendingCodes.delete(ourCode), 5 * 60 * 1000); // expire in 5 min
+  // Issue a short-lived code JWT containing the Nifty token — Claude.ai will exchange this next
+  const ourCode = jwt.sign({ niftyToken: niftyAccessToken }, JWT_SECRET, { expiresIn: "5m" });
 
-  // Redirect back to Claude.ai with our code
   const callbackUrl = new URL(claudeRedirectUri);
   callbackUrl.searchParams.set("code", ourCode);
   if (claudeState) callbackUrl.searchParams.set("state", claudeState);
@@ -115,7 +114,7 @@ app.get("/oauth/callback", async (req, res) => {
   res.redirect(callbackUrl.toString());
 });
 
-// ── Step 3: Claude.ai exchanges our code for a JWT ───────────────────────────
+// ── Step 3: Claude.ai exchanges our code for a long-lived JWT ────────────────
 app.post("/oauth/token", (req, res) => {
   const { code, grant_type } = req.body;
 
@@ -123,14 +122,15 @@ app.post("/oauth/token", (req, res) => {
     return res.status(400).json({ error: "unsupported_grant_type" });
   }
 
-  const niftyToken = pendingCodes.get(code);
-  if (!niftyToken) {
-    return res.status(400).json({ error: "invalid_grant", error_description: "Code not found or expired" });
+  let niftyToken: string;
+  try {
+    const payload = jwt.verify(code, JWT_SECRET) as { niftyToken: string };
+    niftyToken = payload.niftyToken;
+  } catch {
+    return res.status(400).json({ error: "invalid_grant", error_description: "Code is invalid or expired" });
   }
 
-  pendingCodes.delete(code);
-
-  // Wrap the Nifty token in a JWT — Claude.ai sends this on every /mcp request
+  // Issue a long-lived access token wrapping the Nifty token
   const accessToken = jwt.sign({ niftyToken }, JWT_SECRET, { expiresIn: "30d" });
 
   res.json({
@@ -146,12 +146,12 @@ app.get("/", (_req, res) => {
 });
 
 // ── MCP endpoint ─────────────────────────────────────────────────────────────
-app.use("/mcp", (req, res, next) => {
+app.use("/mcp", (req, _res, next) => {
   req.headers["accept"] = "application/json, text/event-stream";
   next();
 });
 
-// GET is public — Claude.ai checks this before it has a token
+// GET is public — Claude.ai probes this before it has a token
 app.get("/mcp", (_req, res) => {
   res.json({ name: "nifty-mcp-server", status: "ok" });
 });
@@ -172,8 +172,8 @@ app.post("/mcp", async (req, res) => {
     res.status(401).json({ error: "Invalid or expired token" });
     return;
   }
-  const mcpServer = buildMcpServer(niftyToken);
 
+  const mcpServer = buildMcpServer(niftyToken);
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
     enableJsonResponse: true,
