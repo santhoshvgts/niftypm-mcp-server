@@ -13,6 +13,7 @@ import { registerTimelogTools } from "../../src/tools/timelogs.js";
 
 const BASE_URL = process.env.URL || "https://niftypm-mcp.netlify.app";
 const JWT_SECRET = process.env.JWT_SECRET || "change-me-in-production";
+console.log("JWT_SECRET set:", !!process.env.JWT_SECRET);
 
 const NIFTY_CLIENT_ID = "rfXF4Z8Y51U0RF6BBTrU0cTTM4DCX9un";
 const NIFTY_CLIENT_SECRET = process.env.NIFTY_CLIENT_SECRET!;
@@ -153,8 +154,13 @@ app.get("/oauth/callback", async (req, res) => {
 // ── Step 3: Claude.ai exchanges our code for a long-lived JWT ────────────────
 app.post("/token", (req, res) => {
   console.log("token request body:", JSON.stringify(req.body));
-  console.log("token request headers:", JSON.stringify(req.headers));
-  const { code, grant_type } = req.body;
+  // Claude.ai sends application/x-www-form-urlencoded — merge parsed body from both formats
+  const body = { ...req.body };
+  // If body is a string (unparsed), parse it manually
+  if (typeof req.body === "string") {
+    new URLSearchParams(req.body).forEach((v, k) => { body[k] = v; });
+  }
+  const { code, grant_type } = body;
 
   if (grant_type !== "authorization_code") {
     return res.status(400).json({ error: "unsupported_grant_type" });
