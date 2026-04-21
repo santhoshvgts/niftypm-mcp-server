@@ -29,7 +29,7 @@ registerTimelogTools(mcpServer, getClient);
 const app = express();
 app.use(express.json());
 
-// OAuth discovery — Claude.ai checks this before connecting
+// OAuth discovery
 app.get("/.well-known/oauth-authorization-server", (_req, res) => {
   res.json({
     issuer: BASE_URL,
@@ -51,7 +51,7 @@ app.get("/oauth/authorize", (req, res) => {
   res.redirect(url.toString());
 });
 
-// OAuth token — exchange code for a static token
+// OAuth token exchange
 app.post("/oauth/token", (_req, res) => {
   res.json({
     access_token: "nifty-static-token",
@@ -65,7 +65,17 @@ app.get("/", (_req, res) => {
   res.json({ name: "nifty-mcp-server", status: "ok", token_configured: !!NIFTY_API_TOKEN });
 });
 
-// MCP endpoint
+// MCP endpoint — handle both GET and POST
+// Inject Accept header so StreamableHTTPServerTransport doesn't reject the request
+app.use("/mcp", (req, _res, next) => {
+  req.headers["accept"] = "application/json, text/event-stream";
+  next();
+});
+
+app.get("/mcp", (_req, res) => {
+  res.json({ name: "nifty-mcp-server", status: "ok" });
+});
+
 app.post("/mcp", async (req, res) => {
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
