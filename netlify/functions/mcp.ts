@@ -122,7 +122,12 @@ app.get("/oauth/callback", async (req, res) => {
       redirect_uri: REDIRECT_URI,
     }), { headers: { "Content-Type": "application/x-www-form-urlencoded" } });
 
-    niftyAccessToken = response.data.access_token;
+    const data = response.data;
+    console.log("Nifty token response:", JSON.stringify(data));
+    niftyAccessToken = data.access_token || data.token || data.accessToken;
+    if (!niftyAccessToken) {
+      return res.status(500).send(`Nifty token response missing access_token: ${JSON.stringify(data)}`);
+    }
   } catch (err: any) {
     console.error("Nifty token exchange failed:", err?.response?.data || err.message);
     return res.status(500).send(`Failed to exchange token with Nifty: ${JSON.stringify(err?.response?.data)}`);
