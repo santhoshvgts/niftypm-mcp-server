@@ -152,6 +152,8 @@ app.get("/oauth/callback", async (req, res) => {
 
 // ── Step 3: Claude.ai exchanges our code for a long-lived JWT ────────────────
 app.post("/token", (req, res) => {
+  console.log("token request body:", JSON.stringify(req.body));
+  console.log("token request headers:", JSON.stringify(req.headers));
   const { code, grant_type } = req.body;
 
   if (grant_type !== "authorization_code") {
