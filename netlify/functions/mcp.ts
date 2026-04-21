@@ -43,7 +43,7 @@ app.get("/.well-known/oauth-protected-resource", (_req, res) => {
 });
 
 // ── OAuth discovery (RFC8414) ─────────────────────────────────────────────────
-app.get("/.well-known/oauth-protected-resource", (_req, res) => {
+app.get("/.well-known/oauth-authorization-server", (_req, res) => {
   res.json({
     issuer: BASE_URL,
     authorization_endpoint: `${BASE_URL}/authorize`,
