@@ -7,6 +7,24 @@
   node_bundler = "esbuild"
 
 [[redirects]]
+  from = "/.well-known/oauth-authorization-server"
+  to = "/.netlify/functions/mcp/.well-known/oauth-authorization-server"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/oauth/authorize"
+  to = "/.netlify/functions/mcp/oauth/authorize"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/oauth/token"
+  to = "/.netlify/functions/mcp/oauth/token"
+  status = 200
+  force = true
+
+[[redirects]]
   from = "/mcp"
   to = "/.netlify/functions/mcp/mcp"
   status = 200
