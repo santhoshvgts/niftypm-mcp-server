@@ -19,6 +19,12 @@
   force = true
 
 [[redirects]]
+  from = "/oauth/callback"
+  to = "/.netlify/functions/mcp/oauth/callback"
+  status = 200
+  force = true
+
+[[redirects]]
   from = "/oauth/token"
   to = "/.netlify/functions/mcp/oauth/token"
   status = 200
