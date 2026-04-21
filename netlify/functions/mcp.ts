@@ -69,6 +69,7 @@ app.post("/register", (_req, res) => {
 
 // ── Step 1: Redirect to Nifty's real OAuth authorize page ────────────────────
 app.get("/authorize", (req, res) => {
+  console.log("authorize query params:", JSON.stringify(req.query));
   const { redirect_uri, state } = req.query as Record<string, string>;
 
   const stateToken = jwt.sign(
@@ -135,6 +136,12 @@ app.get("/oauth/callback", async (req, res) => {
 
   // Issue a short-lived code JWT containing the Nifty token — Claude.ai will exchange this next
   const ourCode = jwt.sign({ niftyToken: niftyAccessToken }, JWT_SECRET, { expiresIn: "5m" });
+
+  console.log("callback claudeRedirectUri:", claudeRedirectUri, "claudeState:", claudeState);
+
+  if (!claudeRedirectUri) {
+    return res.status(400).send("Missing redirect_uri — OAuth flow cannot complete");
+  }
 
   const callbackUrl = new URL(claudeRedirectUri);
   callbackUrl.searchParams.set("code", ourCode);
