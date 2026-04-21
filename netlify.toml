@@ -35,7 +35,6 @@
   to = "/.netlify/functions/mcp/oauth/callback"
   status = 200
   force = true
-  query = {r = ":r", s = ":s", code = ":code", state = ":state", error = ":error"}
 
 [[redirects]]
   from = "/token"
