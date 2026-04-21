@@ -69,22 +69,19 @@ app.post("/register", (_req, res) => {
 });
 
 // ── Step 1: Redirect to Nifty's real OAuth authorize page ────────────────────
+// Encode redirect_uri + claude state as plain base64 in Nifty's state param.
+// No signing needed — Nifty echoes it back unmodified.
 app.get("/authorize", (req, res) => {
-  console.log("authorize query params:", JSON.stringify(req.query));
   const { redirect_uri, state } = req.query as Record<string, string>;
 
-  const stateToken = jwt.sign(
-    { claudeRedirectUri: redirect_uri, claudeState: state },
-    JWT_SECRET,
-    { expiresIn: "10m" }
-  );
+  const proxyState = Buffer.from(JSON.stringify({ r: redirect_uri, s: state })).toString("base64url");
 
   const niftyAuthUrl = new URL("https://nifty.pm/authorize");
   niftyAuthUrl.searchParams.set("response_type", "code");
   niftyAuthUrl.searchParams.set("client_id", NIFTY_CLIENT_ID);
   niftyAuthUrl.searchParams.set("redirect_uri", REDIRECT_URI);
   niftyAuthUrl.searchParams.set("scope", NIFTY_SCOPES);
-  niftyAuthUrl.searchParams.set("state", stateToken);
+  niftyAuthUrl.searchParams.set("state", proxyState);
 
   res.redirect(niftyAuthUrl.toString());
 });
@@ -102,15 +99,15 @@ app.get("/oauth/callback", async (req, res) => {
     return res.status(400).send(`Authorization failed: ${error || "missing code or state"}`);
   }
 
-  // Decode Claude's original redirect_uri + state from our signed JWT
+  // Decode redirect_uri + claude state from base64
   let claudeRedirectUri: string;
   let claudeState: string;
   try {
-    const payload = jwt.verify(state, JWT_SECRET) as { claudeRedirectUri: string; claudeState: string };
-    claudeRedirectUri = payload.claudeRedirectUri;
-    claudeState = payload.claudeState;
+    const parsed = JSON.parse(Buffer.from(state, "base64url").toString());
+    claudeRedirectUri = parsed.r;
+    claudeState = parsed.s;
   } catch (err) {
-    return res.status(400).send("Invalid or expired state token");
+    return res.status(400).send(`Failed to parse state: ${err}`);
   }
 
   // Exchange Nifty's code for a Nifty access token
