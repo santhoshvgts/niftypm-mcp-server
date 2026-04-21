@@ -147,30 +147,31 @@ app.get("/", (_req, res) => {
 
 // ── MCP endpoint ─────────────────────────────────────────────────────────────
 app.use("/mcp", (req, res, next) => {
-  // Inject Accept header required by StreamableHTTPServerTransport
   req.headers["accept"] = "application/json, text/event-stream";
+  next();
+});
 
+// GET is public — Claude.ai checks this before it has a token
+app.get("/mcp", (_req, res) => {
+  res.json({ name: "nifty-mcp-server", status: "ok" });
+});
+
+// POST requires a valid JWT
+app.post("/mcp", async (req, res) => {
   const authHeader = req.headers["authorization"];
   if (!authHeader?.startsWith("Bearer ")) {
     res.status(401).json({ error: "Missing bearer token" });
     return;
   }
 
+  let niftyToken: string;
   try {
     const payload = jwt.verify(authHeader.slice(7), JWT_SECRET) as { niftyToken: string };
-    (req as any).niftyToken = payload.niftyToken;
-    next();
+    niftyToken = payload.niftyToken;
   } catch {
     res.status(401).json({ error: "Invalid or expired token" });
+    return;
   }
-});
-
-app.get("/mcp", (_req, res) => {
-  res.json({ name: "nifty-mcp-server", status: "ok" });
-});
-
-app.post("/mcp", async (req, res) => {
-  const niftyToken = (req as any).niftyToken as string;
   const mcpServer = buildMcpServer(niftyToken);
 
   const transport = new StreamableHTTPServerTransport({
