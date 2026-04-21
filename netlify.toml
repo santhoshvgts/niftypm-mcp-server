@@ -7,6 +7,12 @@
   node_bundler = "esbuild"
 
 [[redirects]]
+  from = "/.well-known/oauth-protected-resource"
+  to = "/.netlify/functions/mcp/.well-known/oauth-protected-resource"
+  status = 200
+  force = true
+
+[[redirects]]
   from = "/.well-known/oauth-authorization-server"
   to = "/.netlify/functions/mcp/.well-known/oauth-authorization-server"
   status = 200

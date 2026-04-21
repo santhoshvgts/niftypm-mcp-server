@@ -34,6 +34,14 @@ const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// ── Protected Resource Metadata (RFC9728) — Claude.ai checks this first ───────
+app.get("/.well-known/oauth-protected-resource", (_req, res) => {
+  res.json({
+    resource: BASE_URL,
+    authorization_servers: [`${BASE_URL}`],
+  });
+});
+
 // ── OAuth discovery (RFC8414) ─────────────────────────────────────────────────
 app.get("/.well-known/oauth-authorization-server", (_req, res) => {
   res.json({
