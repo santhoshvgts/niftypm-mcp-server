@@ -34,22 +34,33 @@ const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// ── OAuth discovery ───────────────────────────────────────────────────────────
+// ── OAuth discovery (RFC8414) ─────────────────────────────────────────────────
 app.get("/.well-known/oauth-authorization-server", (_req, res) => {
   res.json({
     issuer: BASE_URL,
-    authorization_endpoint: `${BASE_URL}/oauth/authorize`,
-    token_endpoint: `${BASE_URL}/oauth/token`,
+    authorization_endpoint: `${BASE_URL}/authorize`,
+    token_endpoint: `${BASE_URL}/token`,
+    registration_endpoint: `${BASE_URL}/register`,
     response_types_supported: ["code"],
     grant_types_supported: ["authorization_code"],
     code_challenge_methods_supported: ["S256"],
   });
 });
 
+// ── Dynamic Client Registration (RFC7591) — auto-approve all clients ─────────
+app.post("/register", (_req, res) => {
+  res.status(201).json({
+    client_id: "mcp-client",
+    client_secret_expires_at: 0,
+    redirect_uris: [],
+    grant_types: ["authorization_code"],
+    response_types: ["code"],
+    token_endpoint_auth_method: "none",
+  });
+});
+
 // ── Step 1: Redirect to Nifty's real OAuth authorize page ────────────────────
-// Encode Claude's redirect_uri + state into a signed JWT passed as Nifty's state param.
-// No in-memory storage needed — survives across serverless instances.
-app.get("/oauth/authorize", (req, res) => {
+app.get("/authorize", (req, res) => {
   const { redirect_uri, state } = req.query as Record<string, string>;
 
   const stateToken = jwt.sign(
@@ -120,7 +131,7 @@ app.get("/oauth/callback", async (req, res) => {
 });
 
 // ── Step 3: Claude.ai exchanges our code for a long-lived JWT ────────────────
-app.post("/oauth/token", (req, res) => {
+app.post("/token", (req, res) => {
   const { code, grant_type } = req.body;
 
   if (grant_type !== "authorization_code") {
