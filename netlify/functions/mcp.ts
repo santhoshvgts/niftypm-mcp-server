@@ -69,22 +69,19 @@ app.post("/register", (_req, res) => {
 });
 
 // ── Step 1: Redirect to Nifty's real OAuth authorize page ────────────────────
-// Encode redirect_uri + claude state as plain base64 in Nifty's state param.
-// No signing needed — Nifty echoes it back unmodified.
 app.get("/authorize", (req, res) => {
   const { redirect_uri, state } = req.query as Record<string, string>;
 
-  // Nifty overwrites our state param, so encode claude's redirect_uri + state
-  // into our redirect_uri instead — Nifty always preserves redirect_uri exactly.
-  const callbackUrl = new URL(REDIRECT_URI);
-  callbackUrl.searchParams.set("r", redirect_uri);
-  callbackUrl.searchParams.set("s", state);
+  // Nifty strips query params from redirect_uri, so encode claude's redirect_uri
+  // + state into Nifty's state param as base64 JSON — Nifty echoes it back unmodified.
+  const encodedState = Buffer.from(JSON.stringify({ redirect_uri, state })).toString("base64url");
 
   const niftyAuthUrl = new URL("https://nifty.pm/authorize");
   niftyAuthUrl.searchParams.set("response_type", "code");
   niftyAuthUrl.searchParams.set("client_id", NIFTY_CLIENT_ID);
-  niftyAuthUrl.searchParams.set("redirect_uri", callbackUrl.toString());
+  niftyAuthUrl.searchParams.set("redirect_uri", REDIRECT_URI);
   niftyAuthUrl.searchParams.set("scope", NIFTY_SCOPES);
+  niftyAuthUrl.searchParams.set("state", encodedState);
 
   res.redirect(niftyAuthUrl.toString());
 });
@@ -96,22 +93,31 @@ app.get("/", (_req, res) => {
 
 // ── Step 2: Nifty redirects here after user approves ─────────────────────────
 app.get("/oauth/callback", async (req, res) => {
-  const { code, error, r: claudeRedirectUri, s: claudeState } = req.query as Record<string, string>;
+  const { code, error, state: niftyState } = req.query as Record<string, string>;
 
   if (error || !code) {
     return res.status(400).send(`Authorization failed: ${error || "missing code"}`);
   }
 
-  if (!claudeRedirectUri) {
-    return res.status(400).send("Missing redirect_uri in callback");
+  // Decode claude's redirect_uri + state from the state param we encoded in /authorize
+  let claudeRedirectUri: string;
+  let claudeState: string | undefined;
+  try {
+    const decoded = JSON.parse(Buffer.from(niftyState || "", "base64url").toString());
+    claudeRedirectUri = decoded.redirect_uri;
+    claudeState = decoded.state;
+  } catch {
+    return res.status(400).send("Invalid or missing state parameter");
   }
 
-  // Build the exact redirect_uri we sent to Nifty (must match exactly for token exchange)
-  const callbackUrl = new URL(REDIRECT_URI);
-  callbackUrl.searchParams.set("r", claudeRedirectUri);
-  callbackUrl.searchParams.set("s", claudeState || "");
+  if (!claudeRedirectUri) {
+    return res.status(400).send("Missing redirect_uri in state");
+  }
+
+  console.log("callback claudeRedirectUri:", claudeRedirectUri, "claudeState:", claudeState);
 
   // Exchange Nifty's code for a Nifty access token
+  // redirect_uri must exactly match what we sent in /authorize (plain REDIRECT_URI, no extra params)
   let niftyAccessToken: string;
   try {
     const response = await axios.post(NIFTY_TOKEN_URL, new URLSearchParams({
@@ -119,7 +125,7 @@ app.get("/oauth/callback", async (req, res) => {
       code,
       client_id: NIFTY_CLIENT_ID,
       client_secret: NIFTY_CLIENT_SECRET,
-      redirect_uri: callbackUrl.toString(),
+      redirect_uri: REDIRECT_URI,
     }), { headers: { "Content-Type": "application/x-www-form-urlencoded" } });
 
     const data = response.data;
@@ -135,8 +141,6 @@ app.get("/oauth/callback", async (req, res) => {
 
   // Issue a short-lived code JWT containing the Nifty token — Claude.ai will exchange this next
   const ourCode = jwt.sign({ niftyToken: niftyAccessToken }, JWT_SECRET, { expiresIn: "5m" });
-
-  console.log("callback claudeRedirectUri:", claudeRedirectUri, "claudeState:", claudeState);
 
   const claudeCallbackUrl = new URL(claudeRedirectUri);
   claudeCallbackUrl.searchParams.set("code", ourCode);
