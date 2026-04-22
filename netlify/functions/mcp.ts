@@ -72,16 +72,18 @@ app.post("/register", (_req, res) => {
 app.get("/authorize", (req, res) => {
   const { redirect_uri, state } = req.query as Record<string, string>;
 
-  // Nifty strips query params from redirect_uri, so encode claude's redirect_uri
-  // + state into Nifty's state param as base64 JSON — Nifty echoes it back unmodified.
-  const encodedState = Buffer.from(JSON.stringify({ redirect_uri, state })).toString("base64url");
+  // Nifty overwrites our `state` param AND strips query params from redirect_uri.
+  // The only thing Nifty preserves exactly is the redirect_uri path itself.
+  // So we sign claude's redirect_uri + state into a short-lived JWT and embed it
+  // as a path segment: /oauth/callback/{token}  — Nifty will redirect there + ?code=...
+  const pathToken = jwt.sign({ redirect_uri, state }, JWT_SECRET, { expiresIn: "10m" });
+  const callbackWithToken = `${BASE_URL}/oauth/callback/${pathToken}`;
 
   const niftyAuthUrl = new URL("https://nifty.pm/authorize");
   niftyAuthUrl.searchParams.set("response_type", "code");
   niftyAuthUrl.searchParams.set("client_id", NIFTY_CLIENT_ID);
-  niftyAuthUrl.searchParams.set("redirect_uri", REDIRECT_URI);
+  niftyAuthUrl.searchParams.set("redirect_uri", callbackWithToken);
   niftyAuthUrl.searchParams.set("scope", NIFTY_SCOPES);
-  niftyAuthUrl.searchParams.set("state", encodedState);
 
   res.redirect(niftyAuthUrl.toString());
 });
@@ -92,32 +94,35 @@ app.get("/", (_req, res) => {
 });
 
 // ── Step 2: Nifty redirects here after user approves ─────────────────────────
-app.get("/oauth/callback", async (req, res) => {
-  const { code, error, state: niftyState } = req.query as Record<string, string>;
+// Route matches /oauth/callback/{pathToken} — pathToken carries claude's redirect_uri + state
+app.get("/oauth/callback/:pathToken", async (req, res) => {
+  const { code, error } = req.query as Record<string, string>;
+  const { pathToken } = req.params;
 
   if (error || !code) {
     return res.status(400).send(`Authorization failed: ${error || "missing code"}`);
   }
 
-  // Decode claude's redirect_uri + state from the state param we encoded in /authorize
+  // Recover claude's redirect_uri + state from the signed path token
   let claudeRedirectUri: string;
   let claudeState: string | undefined;
   try {
-    const decoded = JSON.parse(Buffer.from(niftyState || "", "base64url").toString());
+    const decoded = jwt.verify(pathToken, JWT_SECRET) as { redirect_uri: string; state?: string };
     claudeRedirectUri = decoded.redirect_uri;
     claudeState = decoded.state;
   } catch {
-    return res.status(400).send("Invalid or missing state parameter");
+    return res.status(400).send("Invalid or expired path token");
   }
 
   if (!claudeRedirectUri) {
-    return res.status(400).send("Missing redirect_uri in state");
+    return res.status(400).send("Missing redirect_uri in path token");
   }
 
   console.log("callback claudeRedirectUri:", claudeRedirectUri, "claudeState:", claudeState);
 
-  // Exchange Nifty's code for a Nifty access token
-  // redirect_uri must exactly match what we sent in /authorize (plain REDIRECT_URI, no extra params)
+  // The redirect_uri sent to Nifty's token endpoint must exactly match what we used in /authorize
+  const callbackWithToken = `${BASE_URL}/oauth/callback/${pathToken}`;
+
   let niftyAccessToken: string;
   try {
     const response = await axios.post(NIFTY_TOKEN_URL, new URLSearchParams({
@@ -125,7 +130,7 @@ app.get("/oauth/callback", async (req, res) => {
       code,
       client_id: NIFTY_CLIENT_ID,
       client_secret: NIFTY_CLIENT_SECRET,
-      redirect_uri: REDIRECT_URI,
+      redirect_uri: callbackWithToken,
     }), { headers: { "Content-Type": "application/x-www-form-urlencoded" } });
 
     const data = response.data;
