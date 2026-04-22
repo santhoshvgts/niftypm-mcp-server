@@ -138,15 +138,11 @@ app.get("/oauth/callback", async (req, res) => {
 
   console.log("callback claudeRedirectUri:", claudeRedirectUri, "claudeState:", claudeState);
 
-  if (!claudeRedirectUri) {
-    return res.status(400).send("Missing redirect_uri — OAuth flow cannot complete");
-  }
+  const claudeCallbackUrl = new URL(claudeRedirectUri);
+  claudeCallbackUrl.searchParams.set("code", ourCode);
+  if (claudeState) claudeCallbackUrl.searchParams.set("state", claudeState);
 
-  const callbackUrl = new URL(claudeRedirectUri);
-  callbackUrl.searchParams.set("code", ourCode);
-  if (claudeState) callbackUrl.searchParams.set("state", claudeState);
-
-  res.redirect(callbackUrl.toString());
+  res.redirect(claudeCallbackUrl.toString());
 });
 
 // ── Step 3: Claude.ai exchanges our code for a long-lived JWT ────────────────
