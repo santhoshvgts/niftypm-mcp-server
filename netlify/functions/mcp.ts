@@ -14,8 +14,8 @@ const BASE_URL = process.env.URL || "https://niftypm-mcp.netlify.app";
 const JWT_SECRET = process.env.JWT_SECRET || "change-me-in-production";
 
 const NIFTY_CLIENT_ID = "rfXF4Z8Y51U0RF6BBTrU0cTTM4DCX9un";
+const NIFTY_CLIENT_SECRET = process.env.NIFTY_CLIENT_SECRET!;
 const NIFTY_SCOPES = "file,doc,message,project,task,member,label,milestone,task_group,subtask,subteam,time_tracking";
-const REDIRECT_URI = `${BASE_URL}/oauth/callback`;
 
 function buildMcpServer(niftyToken: string): McpServer {
   const server = new McpServer({ name: "nifty-mcp-server", version: "1.0.0" });
@@ -64,26 +64,27 @@ app.post("/register", (_req, res) => {
   });
 });
 
-// ── Step 1: Store claude's redirect_uri+state in Netlify Blobs, send to Nifty ─
-// Nifty does not round-trip the state param reliably, and only accepts the
-// pre-registered redirect_uri. We store the payload server-side and pass a
-// random short ID as state — Nifty will echo it back unchanged.
+// ── Step 1: Embed claude's redirect_uri+state in the callback path as a JWT ──
+// Nifty truncates the state param, so we can't use it to carry data.
+// Instead we sign {redirect_uri, state} into a short JWT and embed it in the
+// redirect_uri path — Nifty echoes the exact redirect_uri back to us.
+// This works because we registered /oauth/callback/token as an allowed URI.
 app.get("/authorize", (req, res) => {
   const { redirect_uri, state } = req.query as Record<string, string>;
 
-  // Nifty truncates long state params, so we only store the short claude state value.
-  // redirect_uri is logged here so we can confirm what Claude sends.
-  console.log("authorize redirect_uri:", redirect_uri, "state:", state);
+  const pathToken = jwt.sign(
+    { redirect_uri: redirect_uri || "", state: state || "" },
+    JWT_SECRET,
+    { expiresIn: "10m" }
+  );
 
-  // Sign only the claude state (short) — redirect_uri comes from the registered app config
-  const niftyState = jwt.sign({ s: state || "", r: redirect_uri || "" }, JWT_SECRET, { expiresIn: "10m", noTimestamp: false });
+  const callbackUri = `${BASE_URL}/oauth/callback/${pathToken}`;
 
   const niftyAuthUrl = new URL("https://nifty.pm/authorize");
   niftyAuthUrl.searchParams.set("response_type", "code");
   niftyAuthUrl.searchParams.set("client_id", NIFTY_CLIENT_ID);
-  niftyAuthUrl.searchParams.set("redirect_uri", REDIRECT_URI);
+  niftyAuthUrl.searchParams.set("redirect_uri", callbackUri);
   niftyAuthUrl.searchParams.set("scope", NIFTY_SCOPES);
-  niftyAuthUrl.searchParams.set("state", niftyState);
 
   res.redirect(niftyAuthUrl.toString());
 });
@@ -93,46 +94,71 @@ app.get("/", (_req, res) => {
   res.json({ name: "nifty-mcp-server", status: "ok" });
 });
 
-// ── Step 2: Nifty redirects here with ?code=&state=<sessionId> ───────────────
-// Look up claude's redirect_uri + state from Netlify Blobs using the session ID,
-// wrap the Nifty token in a short-lived code JWT, redirect back to Claude.
-app.get("/oauth/callback", (req, res) => {
-  const { code: niftyToken, state: packedState, error, error_description } = req.query as Record<string, string>;
+// ── Step 2: Nifty redirects here with ?code= ────────────────────────────────
+// Decode claude's redirect_uri+state from the path JWT, exchange the Nifty
+// code for a real access token using the client secret, wrap it in our JWT,
+// then redirect back to Claude.
+app.get("/oauth/callback/:pathToken", async (req, res) => {
+  const { pathToken } = req.params;
+  const { code: niftyCode, error, error_description } = req.query as Record<string, string>;
 
   if (error) {
     res.status(400).send(`Nifty OAuth error: ${error}${error_description ? " — " + error_description : ""}`);
     return;
   }
 
-  if (!packedState) {
-    res.status(400).send("Authorization failed: missing state.");
-    return;
-  }
-
+  // Decode claude's redirect_uri + state from the path JWT
   let claudeRedirectUri = "";
   let claudeState = "";
   try {
-    const decoded = jwt.verify(packedState, JWT_SECRET) as { r: string; s: string };
-    claudeRedirectUri = decoded.r || "";
-    claudeState = decoded.s || "";
+    const decoded = jwt.verify(pathToken, JWT_SECRET) as { redirect_uri: string; state: string };
+    claudeRedirectUri = decoded.redirect_uri || "";
+    claudeState = decoded.state || "";
   } catch {
-    res.status(400).send(`Authorization failed: invalid or expired state. raw=${packedState}`);
+    res.status(400).send("Authorization failed: invalid or expired path token.");
     return;
   }
 
-  if (!niftyToken || !claudeRedirectUri) {
-    res.status(400).send(`Authorization failed: missing code or redirect_uri. uri=${claudeRedirectUri}`);
+  if (!niftyCode || !claudeRedirectUri) {
+    res.status(400).send("Authorization failed: missing code or redirect URI.");
     return;
   }
 
-  const code = jwt.sign({ niftyToken }, JWT_SECRET, { expiresIn: "5m" });
+  // Exchange the Nifty authorization code for a real Nifty access token
+  let niftyAccessToken: string;
+  try {
+    const callbackUri = `${BASE_URL}/oauth/callback/${pathToken}`;
+    const tokenRes = await fetch("https://nifty.pm/oauth/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        code: niftyCode,
+        client_id: NIFTY_CLIENT_ID,
+        client_secret: NIFTY_CLIENT_SECRET,
+        redirect_uri: callbackUri,
+      }).toString(),
+    });
+    const tokenData = await tokenRes.json() as any;
+    if (!tokenRes.ok || !tokenData.access_token) {
+      res.status(400).send(`Nifty token exchange failed: ${JSON.stringify(tokenData)}`);
+      return;
+    }
+    niftyAccessToken = tokenData.access_token;
+  } catch (err: any) {
+    res.status(500).send(`Nifty token exchange error: ${err?.message ?? err}`);
+    return;
+  }
+
+  // Wrap the Nifty access token in a short-lived code JWT for Claude to exchange
+  const code = jwt.sign({ niftyToken: niftyAccessToken }, JWT_SECRET, { expiresIn: "5m" });
   const url = new URL(claudeRedirectUri);
   url.searchParams.set("code", code);
   if (claudeState) url.searchParams.set("state", claudeState);
   res.redirect(url.toString());
 });
 
-// ── Step 3: Claude exchanges our code for a long-lived JWT ───────────────────
+// ── Step 3: Claude exchanges our code for a long-lived access token ──────────
 app.post("/token", (req, res) => {
   const body = typeof req.body === "string"
     ? Object.fromEntries(new URLSearchParams(req.body))

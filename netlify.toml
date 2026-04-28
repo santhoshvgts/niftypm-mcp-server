@@ -31,8 +31,8 @@
   force = true
 
 [[redirects]]
-  from = "/oauth/callback"
-  to = "/.netlify/functions/mcp/oauth/callback"
+  from = "/oauth/callback/:pathToken"
+  to = "/.netlify/functions/mcp/oauth/callback/:pathToken"
   status = 200
   force = true
 
