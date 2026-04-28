@@ -14,7 +14,6 @@ const BASE_URL = process.env.URL || "https://niftypm-mcp.netlify.app";
 const JWT_SECRET = process.env.JWT_SECRET || "change-me-in-production";
 
 const NIFTY_CLIENT_ID = "rfXF4Z8Y51U0RF6BBTrU0cTTM4DCX9un";
-const NIFTY_CLIENT_SECRET = process.env.NIFTY_CLIENT_SECRET!;
 const NIFTY_SCOPES = "file,doc,message,project,task,member,label,milestone,task_group,subtask,subteam,time_tracking";
 
 function buildMcpServer(niftyToken: string): McpServer {
@@ -53,11 +52,12 @@ app.get("/.well-known/oauth-authorization-server", (_req, res) => {
 });
 
 // ── Dynamic Client Registration (RFC7591) ────────────────────────────────────
-app.post("/register", (_req, res) => {
+app.post("/register", (req, res) => {
+  console.log("register body:", JSON.stringify(req.body));
   res.status(201).json({
     client_id: "mcp-client",
     client_secret_expires_at: 0,
-    redirect_uris: [],
+    redirect_uris: req.body?.redirect_uris || [],
     grant_types: ["authorization_code"],
     response_types: ["code"],
     token_endpoint_auth_method: "none",
@@ -71,6 +71,8 @@ app.post("/register", (_req, res) => {
 // This works because we registered /oauth/callback/token as an allowed URI.
 app.get("/authorize", (req, res) => {
   const { redirect_uri, state } = req.query as Record<string, string>;
+
+  console.log("authorize query:", JSON.stringify(req.query));
 
   const pathToken = jwt.sign(
     { redirect_uri: redirect_uri || "", state: state || "" },
@@ -98,7 +100,7 @@ app.get("/", (_req, res) => {
 // Decode claude's redirect_uri+state from the path JWT, exchange the Nifty
 // code for a real access token using the client secret, wrap it in our JWT,
 // then redirect back to Claude.
-app.get("/oauth/callback/:pathToken", async (req, res) => {
+app.get("/oauth/callback/:pathToken", (req, res) => {
   const { pathToken } = req.params;
   const { code: niftyCode, error, error_description } = req.query as Record<string, string>;
 
@@ -124,34 +126,8 @@ app.get("/oauth/callback/:pathToken", async (req, res) => {
     return;
   }
 
-  // Exchange the Nifty authorization code for a real Nifty access token
-  let niftyAccessToken: string;
-  try {
-    const callbackUri = `${BASE_URL}/oauth/callback/${pathToken}`;
-    const tokenRes = await fetch("https://nifty.pm/oauth/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        grant_type: "authorization_code",
-        code: niftyCode,
-        client_id: NIFTY_CLIENT_ID,
-        client_secret: NIFTY_CLIENT_SECRET,
-        redirect_uri: callbackUri,
-      }).toString(),
-    });
-    const tokenData = await tokenRes.json() as any;
-    if (!tokenRes.ok || !tokenData.access_token) {
-      res.status(400).send(`Nifty token exchange failed: ${JSON.stringify(tokenData)}`);
-      return;
-    }
-    niftyAccessToken = tokenData.access_token;
-  } catch (err: any) {
-    res.status(500).send(`Nifty token exchange error: ${err?.message ?? err}`);
-    return;
-  }
-
-  // Wrap the Nifty access token in a short-lived code JWT for Claude to exchange
-  const code = jwt.sign({ niftyToken: niftyAccessToken }, JWT_SECRET, { expiresIn: "5m" });
+  // Nifty's OAuth code IS the access token — no exchange step needed
+  const code = jwt.sign({ niftyToken: niftyCode }, JWT_SECRET, { expiresIn: "5m" });
   const url = new URL(claudeRedirectUri);
   url.searchParams.set("code", code);
   if (claudeState) url.searchParams.set("state", claudeState);
