@@ -120,6 +120,7 @@ app.get("/", (_req, res) => {
 // code in a short-lived JWT, redirect back to Claude.
 app.get("/oauth/callback", async (req, res) => {
   const { code: niftyCode, state: sessionId, error, error_description } = req.query as Record<string, string>;
+  console.log("callback query:", JSON.stringify(req.query));
 
   if (error) {
     res.status(400).send(`Nifty OAuth error: ${error}${error_description ? " — " + error_description : ""}`);
@@ -280,6 +281,7 @@ export const handler = async (event: any, context: any) => {
         transport.handleRequest(mockReq, mockRes, parsedBody).catch(reject);
       });
 
+      console.log("MCP response:", result.status, result.body.slice(0, 200));
       return { statusCode: result.status, headers: { "Content-Type": "application/json", ...result.headers }, body: result.body };
     } catch (err: any) {
       console.error("MCP handler error:", err?.message, err?.stack);
