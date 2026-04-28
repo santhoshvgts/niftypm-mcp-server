@@ -205,7 +205,9 @@ export const handler = async (event: any, context: any) => {
   const path = event.path || event.rawPath || "";
   const method = event.httpMethod || event.requestContext?.http?.method || "";
 
-  if (path === "/mcp" && method === "POST") {
+  console.log("handler invoked:", method, path);
+
+  if ((path === "/mcp" || path.endsWith("/mcp")) && method === "POST") {
     const wwwAuth = `Bearer realm="${BASE_URL}", resource_metadata_url="${BASE_URL}/.well-known/oauth-protected-resource"`;
     const authHeader = event.headers?.authorization || event.headers?.Authorization || "";
 
@@ -222,8 +224,8 @@ export const handler = async (event: any, context: any) => {
     }
 
     try {
-      const body = event.body ? (event.isBase64Encoded ? Buffer.from(event.body, "base64").toString() : event.body) : "{}";
-      const parsedBody = JSON.parse(body);
+      const rawBody = event.body ? (event.isBase64Encoded ? Buffer.from(event.body, "base64").toString() : event.body) : "{}";
+      const parsedBody = JSON.parse(rawBody);
 
       const mcpServer = buildMcpServer(niftyToken);
       const transport = new StreamableHTTPServerTransport({
@@ -232,27 +234,47 @@ export const handler = async (event: any, context: any) => {
       });
       await mcpServer.connect(transport);
 
-      const responseBody = await new Promise<string>((resolve, reject) => {
+      const result = await new Promise<{ status: number; headers: Record<string, string>; body: string }>((resolve, reject) => {
         const chunks: Buffer[] = [];
+        const resHeaders: Record<string, string> = {};
+        let statusCode = 200;
+
         const mockRes: any = {
-          statusCode: 200,
-          headers: {} as Record<string, string>,
-          setHeader(k: string, v: string) { this.headers[k] = v; },
-          getHeader(k: string) { return this.headers[k]; },
-          write(chunk: any) { chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)); },
+          statusCode,
+          setHeader(k: string, v: string) { resHeaders[k.toLowerCase()] = v; },
+          getHeader(k: string) { return resHeaders[k.toLowerCase()]; },
+          removeHeader() {},
+          hasHeader(k: string) { return k.toLowerCase() in resHeaders; },
+          write(chunk: any) {
+            chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+            return true;
+          },
           end(chunk?: any) {
-            if (chunk) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-            resolve(Buffer.concat(chunks).toString());
+            if (chunk) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+            resolve({ status: this.statusCode, headers: resHeaders, body: Buffer.concat(chunks).toString() });
           },
           on() { return this; },
           once() { return this; },
-          emit() { return this; },
+          emit() { return false; },
+          writableEnded: false,
+          writableFinished: false,
         };
-        transport.handleRequest({ headers: event.headers || {}, method: "POST", body: parsedBody } as any, mockRes, parsedBody)
-          .catch(reject);
+
+        const mockReq: any = {
+          method: "POST",
+          url: "/mcp",
+          headers: { ...event.headers, "content-type": "application/json", "accept": "application/json, text/event-stream" },
+          body: parsedBody,
+          socket: { remoteAddress: "127.0.0.1" },
+          on() { return this; },
+          once() { return this; },
+          pipe() { return this; },
+        };
+
+        transport.handleRequest(mockReq, mockRes, parsedBody).catch(reject);
       });
 
-      return { statusCode: 200, headers: { "Content-Type": "application/json" }, body: responseBody };
+      return { statusCode: result.status, headers: { "Content-Type": "application/json", ...result.headers }, body: result.body };
     } catch (err: any) {
       console.error("MCP handler error:", err?.message, err?.stack);
       return { statusCode: 500, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ error: "internal_error", message: err?.message }) };
