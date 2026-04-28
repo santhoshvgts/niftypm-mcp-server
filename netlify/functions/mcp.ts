@@ -81,14 +81,19 @@ app.post("/register", (req, res) => {
 // Solution: store {redirect_uri, state} server-side keyed by a random ID,
 // pass the ID as Nifty's state param (short, survives round-trip).
 app.get("/authorize", async (req, res) => {
-  const { redirect_uri, state } = req.query as Record<string, string>;
+  let { redirect_uri, state } = req.query as Record<string, string>;
   console.log("authorize query:", JSON.stringify(req.query));
+
+  // Claude sometimes omits redirect_uri — fall back to the registered callback
+  if (!redirect_uri) {
+    redirect_uri = "https://claude.ai/api/mcp/auth_callback";
+  }
 
   const sessionId = randomBytes(8).toString("hex"); // 16 chars — short enough for Nifty
 
   try {
     const store = getSessionStore();
-    await store.set(sessionId, JSON.stringify({ redirect_uri: redirect_uri || "", state: state || "" }), { ttl: 600 });
+    await store.set(sessionId, JSON.stringify({ redirect_uri: redirect_uri || "", state: state || "" }));
   } catch (err: any) {
     console.error("Blobs write error:", err?.message);
     res.status(500).send(`Failed to create session: ${err?.message}`);
@@ -134,7 +139,7 @@ app.get("/oauth/callback", async (req, res) => {
   let session: { redirect_uri: string; state: string } | null = null;
   try {
     const store = getSessionStore();
-    const raw = await store.get(sessionId);
+    const raw = await store.get(sessionId, { type: "text" });
     session = raw ? JSON.parse(raw) : null;
     if (session) await store.delete(sessionId); // one-time use
   } catch (err: any) {
@@ -213,14 +218,21 @@ app.post("/mcp", async (req, res) => {
     return;
   }
 
-  const mcpServer = buildMcpServer(niftyToken);
-  const transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: undefined,
-    enableJsonResponse: true,
-  });
-  res.on("close", () => transport.close());
-  await mcpServer.connect(transport);
-  await transport.handleRequest(req, res, req.body);
+  try {
+    const mcpServer = buildMcpServer(niftyToken);
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: undefined,
+      enableJsonResponse: true,
+    });
+    res.on("close", () => transport.close());
+    await mcpServer.connect(transport);
+    await transport.handleRequest(req, res, req.body);
+  } catch (err: any) {
+    console.error("MCP handler error:", err?.message, err?.stack);
+    if (!res.headersSent) {
+      res.status(500).json({ error: "internal_error", message: err?.message });
+    }
+  }
 });
 
 export const handler = serverlessHttp(app);

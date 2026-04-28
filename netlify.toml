@@ -6,6 +6,9 @@
 [functions]
   node_bundler = "esbuild"
 
+[functions."mcp"]
+  timeout = 30
+
 [[redirects]]
   from = "/.well-known/oauth-protected-resource"
   to = "/.netlify/functions/mcp/.well-known/oauth-protected-resource"
