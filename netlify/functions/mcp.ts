@@ -3,7 +3,7 @@ import serverlessHttp from "serverless-http";
 import express from "express";
 import jwt from "jsonwebtoken";
 import { getStore } from "@netlify/blobs";
-import { randomBytes } from "crypto";
+import { randomBytes, createHash } from "crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createNiftyClient } from "../../src/services/niftyClient.js";
@@ -81,19 +81,23 @@ app.post("/register", (req, res) => {
 // Solution: store {redirect_uri, state} server-side keyed by a random ID,
 // pass the ID as Nifty's state param (short, survives round-trip).
 app.get("/authorize", async (req, res) => {
-  let { redirect_uri, state } = req.query as Record<string, string>;
+  let { redirect_uri, state, code_challenge, code_challenge_method } = req.query as Record<string, string>;
   console.log("authorize query:", JSON.stringify(req.query));
 
-  // Claude sometimes omits redirect_uri — fall back to the registered callback
   if (!redirect_uri) {
     redirect_uri = "https://claude.ai/api/mcp/auth_callback";
   }
 
-  const sessionId = randomBytes(8).toString("hex"); // 16 chars — short enough for Nifty
+  const sessionId = randomBytes(8).toString("hex");
 
   try {
     const store = getSessionStore();
-    await store.set(sessionId, JSON.stringify({ redirect_uri: redirect_uri || "", state: state || "" }));
+    await store.set(sessionId, JSON.stringify({
+      redirect_uri: redirect_uri || "",
+      state: state || "",
+      code_challenge: code_challenge || "",
+      code_challenge_method: code_challenge_method || "S256",
+    }));
   } catch (err: any) {
     console.error("Blobs write error:", err?.message);
     res.status(500).send(`Failed to create session: ${err?.message}`);
@@ -137,7 +141,7 @@ app.get("/oauth/callback", async (req, res) => {
     return;
   }
 
-  let session: { redirect_uri: string; state: string } | null = null;
+  let session: { redirect_uri: string; state: string; code_challenge: string; code_challenge_method: string } | null = null;
   try {
     const store = getSessionStore();
     const raw = await store.get(sessionId, { type: "text" });
@@ -155,8 +159,12 @@ app.get("/oauth/callback", async (req, res) => {
 
   console.log("session:", JSON.stringify(session));
 
-  // Nifty's code IS the access token — wrap it in a short-lived JWT for Claude
-  const code = jwt.sign({ niftyToken: niftyCode }, JWT_SECRET, { expiresIn: "5m" });
+  // Nifty's code IS the access token — wrap it with PKCE data for Claude to exchange
+  const code = jwt.sign({
+    niftyToken: niftyCode,
+    code_challenge: session.code_challenge || "",
+    code_challenge_method: session.code_challenge_method || "S256",
+  }, JWT_SECRET, { expiresIn: "5m" });
   const url = new URL(session.redirect_uri);
   url.searchParams.set("code", code);
   // state is required by Claude — always include it
@@ -169,18 +177,32 @@ app.post("/token", (req, res) => {
   const body = typeof req.body === "string"
     ? Object.fromEntries(new URLSearchParams(req.body))
     : req.body;
-  const { code, grant_type } = body;
+  const { code, grant_type, code_verifier } = body;
+
+  console.log("token body:", JSON.stringify({ grant_type, code_verifier: code_verifier?.slice(0, 20) }));
 
   if (grant_type !== "authorization_code") {
     return res.status(400).json({ error: "unsupported_grant_type" });
   }
 
   let niftyToken: string;
+  let codeChallenge: string;
+  let codeChallengeMethod: string;
   try {
-    const payload = jwt.verify(code, JWT_SECRET) as { niftyToken: string };
+    const payload = jwt.verify(code, JWT_SECRET) as { niftyToken: string; code_challenge: string; code_challenge_method: string };
     niftyToken = payload.niftyToken;
+    codeChallenge = payload.code_challenge;
+    codeChallengeMethod = payload.code_challenge_method;
   } catch {
     return res.status(400).json({ error: "invalid_grant", error_description: "Code is invalid or expired" });
+  }
+
+  // Verify PKCE if challenge was set
+  if (codeChallenge && code_verifier) {
+    const computed = createHash("sha256").update(code_verifier).digest("base64url");
+    if (computed !== codeChallenge) {
+      return res.status(400).json({ error: "invalid_grant", error_description: "PKCE verification failed" });
+    }
   }
 
   const accessToken = jwt.sign({ niftyToken }, JWT_SECRET, { expiresIn: "30d" });
@@ -227,6 +249,8 @@ export const handler = async (event: any, context: any) => {
     try {
       const rawBody = event.body ? (event.isBase64Encoded ? Buffer.from(event.body, "base64").toString() : event.body) : "{}";
       const parsedBody = JSON.parse(rawBody);
+
+      console.log("MCP request body:", rawBody.slice(0, 200));
 
       const mcpServer = buildMcpServer(niftyToken);
       const transport = new StreamableHTTPServerTransport({
@@ -278,7 +302,7 @@ export const handler = async (event: any, context: any) => {
           pipe() { return this; },
         };
 
-        transport.handleRequest(mockReq, mockRes, parsedBody).catch(reject);
+        transport.handleRequest(mockReq, mockRes, rawBody).catch(reject);
       });
 
       console.log("MCP response:", result.status, result.body.slice(0, 200));
