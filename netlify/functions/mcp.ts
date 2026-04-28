@@ -70,11 +70,19 @@ app.post("/register", (_req, res) => {
 // Nifty does not round-trip the state param reliably, and only accepts the
 // pre-registered redirect_uri. We store the payload server-side and pass a
 // random short ID as state — Nifty will echo it back unchanged.
+function getOAuthStore() {
+  return getStore({
+    name: "oauth-sessions",
+    siteID: process.env.NETLIFY_SITE_ID!,
+    token: process.env.NETLIFY_TOKEN!,
+  });
+}
+
 app.get("/authorize", async (req, res) => {
   const { redirect_uri, state } = req.query as Record<string, string>;
 
   const sessionId = randomBytes(16).toString("hex");
-  const store = getStore("oauth-sessions");
+  const store = getOAuthStore();
   await store.setJSON(sessionId, { redirect_uri: redirect_uri || "", state: state || "" }, { ttl: 600 });
 
   const niftyAuthUrl = new URL("https://nifty.pm/authorize");
@@ -108,7 +116,7 @@ app.get("/oauth/callback", async (req, res) => {
     return;
   }
 
-  const store = getStore("oauth-sessions");
+  const store = getOAuthStore();
   const session = await store.get(sessionId, { type: "json" }) as { redirect_uri: string; state: string } | null;
 
   if (!session?.redirect_uri) {
