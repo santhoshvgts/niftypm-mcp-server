@@ -237,14 +237,18 @@ export const handler = async (event: any, context: any) => {
       const result = await new Promise<{ status: number; headers: Record<string, string>; body: string }>((resolve, reject) => {
         const chunks: Buffer[] = [];
         const resHeaders: Record<string, string> = {};
-        let statusCode = 200;
 
         const mockRes: any = {
-          statusCode,
+          statusCode: 200,
           setHeader(k: string, v: string) { resHeaders[k.toLowerCase()] = v; },
           getHeader(k: string) { return resHeaders[k.toLowerCase()]; },
-          removeHeader() {},
+          getHeaders() { return resHeaders; },
+          removeHeader(k: string) { delete resHeaders[k.toLowerCase()]; },
           hasHeader(k: string) { return k.toLowerCase() in resHeaders; },
+          writeHead(code: number, hdrs?: Record<string, string>) {
+            this.statusCode = code;
+            if (hdrs) Object.entries(hdrs).forEach(([k, v]) => { resHeaders[k.toLowerCase()] = v; });
+          },
           write(chunk: any) {
             chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
             return true;
@@ -258,6 +262,8 @@ export const handler = async (event: any, context: any) => {
           emit() { return false; },
           writableEnded: false,
           writableFinished: false,
+          headersSent: false,
+          flushHeaders() {},
         };
 
         const mockReq: any = {
