@@ -100,7 +100,14 @@ app.get("/", (_req, res) => {
 // wrap the Nifty code in a short-lived JWT, redirect back to Claude.
 app.get("/oauth/callback/:pathToken", (req, res) => {
   const { pathToken } = req.params;
-  const { code: niftyToken } = req.query as Record<string, string>;
+  const query = req.query as Record<string, string>;
+  const { code: niftyToken, error, error_description } = query;
+
+  // Surface any OAuth error from Nifty immediately
+  if (error) {
+    res.status(400).send(`Nifty OAuth error: ${error}${error_description ? " — " + error_description : ""}. Query: ${JSON.stringify(query)}`);
+    return;
+  }
 
   let claudeRedirectUri = "";
   let claudeState = "";
@@ -114,7 +121,7 @@ app.get("/oauth/callback/:pathToken", (req, res) => {
   }
 
   if (!niftyToken || !claudeRedirectUri) {
-    res.status(400).send("Authorization failed: missing token or redirect URI.");
+    res.status(400).send(`Authorization failed: missing token or redirect URI. Query received: ${JSON.stringify(query)}`);
     return;
   }
 
