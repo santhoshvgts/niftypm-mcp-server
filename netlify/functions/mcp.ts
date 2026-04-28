@@ -74,14 +74,16 @@ app.post("/register", (_req, res) => {
 function packState(redirect_uri: string, state: string): string {
   const payload = Buffer.from(JSON.stringify({ r: redirect_uri, s: state })).toString("base64url");
   const sig = createHmac("sha256", JWT_SECRET).update(payload).digest("base64url").slice(0, 16);
-  return `${payload}.${sig}`;
+  // Use ~ as separator — base64url uses A-Z a-z 0-9 - _ so ~ is safe
+  return `${payload}~${sig}`;
 }
 
 function unpackState(packed: string): { redirect_uri: string; state: string } | null {
   try {
-    const dot = packed.lastIndexOf(".");
-    const payload = packed.slice(0, dot);
-    const sig = packed.slice(dot + 1);
+    const sep = packed.lastIndexOf("~");
+    if (sep === -1) return null;
+    const payload = packed.slice(0, sep);
+    const sig = packed.slice(sep + 1);
     const expectedSig = createHmac("sha256", JWT_SECRET).update(payload).digest("base64url").slice(0, 16);
     if (sig !== expectedSig) return null;
     const { r, s } = JSON.parse(Buffer.from(payload, "base64url").toString());
@@ -129,7 +131,7 @@ app.get("/oauth/callback", (req, res) => {
 
   const session = unpackState(packedState);
   if (!session?.redirect_uri) {
-    res.status(400).send("Authorization failed: invalid or tampered state.");
+    res.status(400).send(`Authorization failed: invalid state. raw=${packedState}`);
     return;
   }
 
