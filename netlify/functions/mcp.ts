@@ -187,12 +187,7 @@ app.post("/token", (req, res) => {
   });
 });
 
-// ── MCP endpoint ──────────────────────────────────────────────────────────────
-app.use("/mcp", (req, _res, next) => {
-  req.headers["accept"] = "application/json, text/event-stream";
-  next();
-});
-
+// ── MCP GET: discovery/auth challenge ────────────────────────────────────────
 app.get("/mcp", (_req, res) => {
   res
     .set("WWW-Authenticate", `Bearer realm="${BASE_URL}", resource_metadata_url="${BASE_URL}/.well-known/oauth-protected-resource"`)
@@ -200,39 +195,66 @@ app.get("/mcp", (_req, res) => {
     .json({ error: "unauthorized" });
 });
 
-app.post("/mcp", async (req, res) => {
-  const authHeader = req.headers["authorization"];
-  const wwwAuth = `Bearer realm="${BASE_URL}", resource_metadata_url="${BASE_URL}/.well-known/oauth-protected-resource"`;
+const expressHandler = serverlessHttp(app);
 
-  if (!authHeader?.startsWith("Bearer ")) {
-    res.set("WWW-Authenticate", wwwAuth).status(401).json({ error: "Missing bearer token" });
-    return;
-  }
+// ── Main handler: MCP POST bypasses serverless-http to avoid buffering issues ─
+export const handler = async (event: any, context: any) => {
+  const path = event.path || event.rawPath || "";
+  const method = event.httpMethod || event.requestContext?.http?.method || "";
 
-  let niftyToken: string;
-  try {
-    const payload = jwt.verify(authHeader.slice(7), JWT_SECRET) as { niftyToken: string };
-    niftyToken = payload.niftyToken;
-  } catch {
-    res.set("WWW-Authenticate", wwwAuth).status(401).json({ error: "Invalid or expired token" });
-    return;
-  }
+  if (path === "/mcp" && method === "POST") {
+    const wwwAuth = `Bearer realm="${BASE_URL}", resource_metadata_url="${BASE_URL}/.well-known/oauth-protected-resource"`;
+    const authHeader = event.headers?.authorization || event.headers?.Authorization || "";
 
-  try {
-    const mcpServer = buildMcpServer(niftyToken);
-    const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: undefined,
-      enableJsonResponse: true,
-    });
-    res.on("close", () => transport.close());
-    await mcpServer.connect(transport);
-    await transport.handleRequest(req, res, req.body);
-  } catch (err: any) {
-    console.error("MCP handler error:", err?.message, err?.stack);
-    if (!res.headersSent) {
-      res.status(500).json({ error: "internal_error", message: err?.message });
+    if (!authHeader.startsWith("Bearer ")) {
+      return { statusCode: 401, headers: { "WWW-Authenticate": wwwAuth, "Content-Type": "application/json" }, body: JSON.stringify({ error: "Missing bearer token" }) };
+    }
+
+    let niftyToken: string;
+    try {
+      const payload = jwt.verify(authHeader.slice(7), JWT_SECRET) as { niftyToken: string };
+      niftyToken = payload.niftyToken;
+    } catch {
+      return { statusCode: 401, headers: { "WWW-Authenticate": wwwAuth, "Content-Type": "application/json" }, body: JSON.stringify({ error: "Invalid or expired token" }) };
+    }
+
+    try {
+      const body = event.body ? (event.isBase64Encoded ? Buffer.from(event.body, "base64").toString() : event.body) : "{}";
+      const parsedBody = JSON.parse(body);
+
+      const mcpServer = buildMcpServer(niftyToken);
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: undefined,
+        enableJsonResponse: true,
+      });
+      await mcpServer.connect(transport);
+
+      const responseBody = await new Promise<string>((resolve, reject) => {
+        const chunks: Buffer[] = [];
+        const mockRes: any = {
+          statusCode: 200,
+          headers: {} as Record<string, string>,
+          setHeader(k: string, v: string) { this.headers[k] = v; },
+          getHeader(k: string) { return this.headers[k]; },
+          write(chunk: any) { chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)); },
+          end(chunk?: any) {
+            if (chunk) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+            resolve(Buffer.concat(chunks).toString());
+          },
+          on() { return this; },
+          once() { return this; },
+          emit() { return this; },
+        };
+        transport.handleRequest({ headers: event.headers || {}, method: "POST", body: parsedBody } as any, mockRes, parsedBody)
+          .catch(reject);
+      });
+
+      return { statusCode: 200, headers: { "Content-Type": "application/json" }, body: responseBody };
+    } catch (err: any) {
+      console.error("MCP handler error:", err?.message, err?.stack);
+      return { statusCode: 500, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ error: "internal_error", message: err?.message }) };
     }
   }
-});
 
-export const handler = serverlessHttp(app);
+  return expressHandler(event, context);
+};
