@@ -100,7 +100,7 @@ app.get("/authorize", async (req, res) => {
     return;
   }
 
-  const niftyAuthUrl = new URL("https://nifty.pm/authorize");
+  const niftyAuthUrl = new URL("https://vgts.nifty.pm/authorize");
   niftyAuthUrl.searchParams.set("response_type", "code");
   niftyAuthUrl.searchParams.set("client_id", NIFTY_CLIENT_ID);
   niftyAuthUrl.searchParams.set("redirect_uri", REDIRECT_URI);
