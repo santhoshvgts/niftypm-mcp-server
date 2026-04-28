@@ -116,11 +116,18 @@ app.get("/oauth/callback", async (req, res) => {
     return;
   }
 
-  const store = getOAuthStore();
-  const session = await store.get(sessionId, { type: "json" }) as { redirect_uri: string; state: string } | null;
+  let store: ReturnType<typeof getOAuthStore>;
+  let session: { redirect_uri: string; state: string } | null = null;
+  try {
+    store = getOAuthStore();
+    session = await store.get(sessionId, { type: "json" }) as { redirect_uri: string; state: string } | null;
+  } catch (err: any) {
+    res.status(500).send(`Blobs error: ${err?.message ?? err}. NETLIFY_SITE_ID set: ${!!process.env.NETLIFY_SITE_ID}, NETLIFY_TOKEN set: ${!!process.env.NETLIFY_TOKEN}`);
+    return;
+  }
 
   if (!session?.redirect_uri) {
-    res.status(400).send("Authorization failed: session not found or expired.");
+    res.status(400).send(`Authorization failed: session not found or expired. sessionId: ${sessionId}, NETLIFY_SITE_ID set: ${!!process.env.NETLIFY_SITE_ID}, NETLIFY_TOKEN set: ${!!process.env.NETLIFY_TOKEN}`);
     return;
   }
 
