@@ -1,8 +1,8 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { AxiosInstance } from "axios";
 import { z } from "zod";
-import { DEFAULT_LIMIT, MAX_LIMIT, CHARACTER_LIMIT } from "../constants.js";
-import { formatApiError, truncateIfNeeded } from "../services/niftyClient.js";
+import { DEFAULT_LIMIT, MAX_LIMIT, CHARACTER_LIMIT } from "../constants";
+import { formatApiError, truncateIfNeeded } from "../services/niftyClient";
 
 export function registerTimelogTools(server: McpServer, getClient: () => AxiosInstance): void {
 

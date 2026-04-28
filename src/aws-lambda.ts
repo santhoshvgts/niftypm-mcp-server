@@ -6,11 +6,11 @@ import serverlessExpress from "@vendia/serverless-express";
 import express from "express";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { createNiftyClient } from "./services/niftyClient.js";
-import { registerProjectTools } from "./tools/projects.js";
-import { registerTaskTools } from "./tools/tasks.js";
-import { registerMilestoneTools } from "./tools/milestones.js";
-import { registerTimelogTools } from "./tools/timelogs.js";
+import { createNiftyClient } from "./services/niftyClient";
+import { registerProjectTools } from "./tools/projects";
+import { registerTaskTools } from "./tools/tasks";
+import { registerMilestoneTools } from "./tools/milestones";
+import { registerTimelogTools } from "./tools/timelogs";
 import { AxiosInstance } from "axios";
 
 const NIFTY_API_TOKEN = process.env.NIFTY_API_TOKEN;

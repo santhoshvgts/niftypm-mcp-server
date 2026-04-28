@@ -1,6 +1,6 @@
 import axios, { AxiosInstance, AxiosError } from "axios";
-import { NIFTY_API_BASE } from "../constants.js";
-import { NiftyApiError } from "../types.js";
+import { NIFTY_API_BASE } from "../constants";
+import { NiftyApiError } from "../types";
 
 export function createNiftyClient(token: string): AxiosInstance {
   return axios.create({

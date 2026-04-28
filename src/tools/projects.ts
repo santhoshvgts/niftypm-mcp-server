@@ -1,9 +1,9 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { AxiosInstance } from "axios";
 import { z } from "zod";
-import { DEFAULT_LIMIT, MAX_LIMIT, CHARACTER_LIMIT } from "../constants.js";
-import { formatApiError, truncateIfNeeded } from "../services/niftyClient.js";
-import { NiftyProject } from "../types.js";
+import { DEFAULT_LIMIT, MAX_LIMIT, CHARACTER_LIMIT } from "../constants";
+import { formatApiError, truncateIfNeeded } from "../services/niftyClient";
+import { NiftyProject } from "../types";
 
 export function registerProjectTools(server: McpServer, getClient: () => AxiosInstance): void {
 

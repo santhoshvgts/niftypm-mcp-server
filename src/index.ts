@@ -4,11 +4,11 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import express from "express";
 import { AxiosInstance } from "axios";
-import { createNiftyClient } from "./services/niftyClient.js";
-import { registerProjectTools } from "./tools/projects.js";
-import { registerTaskTools } from "./tools/tasks.js";
-import { registerMilestoneTools } from "./tools/milestones.js";
-import { registerTimelogTools } from "./tools/timelogs.js";
+import { createNiftyClient } from "./services/niftyClient";
+import { registerProjectTools } from "./tools/projects";
+import { registerTaskTools } from "./tools/tasks";
+import { registerMilestoneTools } from "./tools/milestones";
+import { registerTimelogTools } from "./tools/timelogs";
 
 // ── Token setup ──────────────────────────────────────────────────────────────
 const NIFTY_API_TOKEN = process.env.NIFTY_API_TOKEN;
