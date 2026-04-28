@@ -64,22 +64,28 @@ app.post("/register", (_req, res) => {
   });
 });
 
-// ── Step 1: Save claude's redirect_uri + state in sessionStorage, then go to Nifty ──
-// Nifty strips all query params AND overwrites state — the only reliable way to
-// survive the round-trip is to keep them client-side in sessionStorage.
+// ── Step 1: Encode claude's redirect_uri+state into a path JWT, send to Nifty ─
+// Nifty strips query params and does NOT round-trip the state param.
+// Solution: embed the payload in the redirect_uri path itself as a signed JWT,
+// so it arrives back at us in the URL path regardless of what Nifty does.
 app.get("/authorize", (req, res) => {
   const { redirect_uri, state } = req.query as Record<string, string>;
 
-  // Encode claude's redirect_uri + state into the Nifty state param so they
-  // survive the round-trip (sessionStorage is unreliable across redirects).
-  const niftyState = Buffer.from(JSON.stringify({ redirect_uri: redirect_uri || "", state: state || "" })).toString("base64url");
+  // Sign a short-lived token containing claude's redirect_uri + state
+  const pathToken = jwt.sign(
+    { redirect_uri: redirect_uri || "", state: state || "" },
+    JWT_SECRET,
+    { expiresIn: "10m" }
+  );
+
+  // Tell Nifty to redirect back to /oauth/callback/<pathToken>
+  const callbackWithToken = `${BASE_URL}/oauth/callback/${pathToken}`;
 
   const niftyAuthUrl = new URL("https://nifty.pm/authorize");
   niftyAuthUrl.searchParams.set("response_type", "code");
   niftyAuthUrl.searchParams.set("client_id", NIFTY_CLIENT_ID);
-  niftyAuthUrl.searchParams.set("redirect_uri", REDIRECT_URI);
+  niftyAuthUrl.searchParams.set("redirect_uri", callbackWithToken);
   niftyAuthUrl.searchParams.set("scope", NIFTY_SCOPES);
-  niftyAuthUrl.searchParams.set("state", niftyState);
 
   res.redirect(niftyAuthUrl.toString());
 });
@@ -89,21 +95,22 @@ app.get("/", (_req, res) => {
   res.json({ name: "nifty-mcp-server", status: "ok" });
 });
 
-// ── Step 2: Nifty redirects here with ?code=&state= ─────────────────────────
-// Decode claude's redirect_uri + state from the state param, wrap the Nifty
-// token in a short-lived code JWT, then redirect back to Claude.
-// The wildcard variant handles legacy redirect URIs that had a JWT path segment.
-app.get(["/oauth/callback", "/oauth/callback/*"], (req, res) => {
-  const { code: niftyToken, state: niftyState } = req.query as Record<string, string>;
+// ── Step 2: Nifty redirects here with ?code= ────────────────────────────────
+// The path token (JWT) carries claude's redirect_uri + state — decode it,
+// wrap the Nifty code in a short-lived JWT, redirect back to Claude.
+app.get("/oauth/callback/:pathToken", (req, res) => {
+  const { pathToken } = req.params;
+  const { code: niftyToken } = req.query as Record<string, string>;
 
   let claudeRedirectUri = "";
   let claudeState = "";
   try {
-    const decoded = JSON.parse(Buffer.from(niftyState || "", "base64url").toString());
+    const decoded = jwt.verify(pathToken, JWT_SECRET) as { redirect_uri: string; state: string };
     claudeRedirectUri = decoded.redirect_uri || "";
     claudeState = decoded.state || "";
   } catch {
-    // state was not our encoded payload — ignore
+    res.status(400).send("Authorization failed: invalid or expired path token.");
+    return;
   }
 
   if (!niftyToken || !claudeRedirectUri) {
