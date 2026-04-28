@@ -48,11 +48,6 @@
   status = 200
   force = true
 
-[[redirects]]
-  from = "/token-wrap"
-  to = "/.netlify/functions/mcp/token-wrap"
-  status = 200
-  force = true
 
 [[redirects]]
   from = "/mcp"
