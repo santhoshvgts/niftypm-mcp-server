@@ -152,11 +152,14 @@ app.get("/oauth/callback", async (req, res) => {
     return;
   }
 
+  console.log("session:", JSON.stringify(session));
+
   // Nifty's code IS the access token — wrap it in a short-lived JWT for Claude
   const code = jwt.sign({ niftyToken: niftyCode }, JWT_SECRET, { expiresIn: "5m" });
   const url = new URL(session.redirect_uri);
   url.searchParams.set("code", code);
-  if (session.state) url.searchParams.set("state", session.state);
+  // state is required by Claude — always include it
+  url.searchParams.set("state", session.state || "");
   res.redirect(url.toString());
 });
 
