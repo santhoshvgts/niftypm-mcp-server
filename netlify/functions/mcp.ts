@@ -2,7 +2,6 @@ import 'dotenv/config';
 import serverlessHttp from "serverless-http";
 import express from "express";
 import jwt from "jsonwebtoken";
-import { createHmac } from "crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createNiftyClient } from "../../src/services/niftyClient.js";
@@ -69,34 +68,15 @@ app.post("/register", (_req, res) => {
 // Nifty does not round-trip the state param reliably, and only accepts the
 // pre-registered redirect_uri. We store the payload server-side and pass a
 // random short ID as state — Nifty will echo it back unchanged.
-// Pack claude's redirect_uri + state into a compact signed token for Nifty's state param.
-// Format: base64url(payload).<hmac-signature>
-function packState(redirect_uri: string, state: string): string {
-  const payload = Buffer.from(JSON.stringify({ r: redirect_uri, s: state })).toString("base64url");
-  const sig = createHmac("sha256", JWT_SECRET).update(payload).digest("base64url").slice(0, 16);
-  // Use ~ as separator — base64url uses A-Z a-z 0-9 - _ so ~ is safe
-  return `${payload}~${sig}`;
-}
-
-function unpackState(packed: string): { redirect_uri: string; state: string } | null {
-  try {
-    const sep = packed.lastIndexOf("~");
-    if (sep === -1) return null;
-    const payload = packed.slice(0, sep);
-    const sig = packed.slice(sep + 1);
-    const expectedSig = createHmac("sha256", JWT_SECRET).update(payload).digest("base64url").slice(0, 16);
-    if (sig !== expectedSig) return null;
-    const { r, s } = JSON.parse(Buffer.from(payload, "base64url").toString());
-    return { redirect_uri: r, state: s };
-  } catch {
-    return null;
-  }
-}
-
 app.get("/authorize", (req, res) => {
   const { redirect_uri, state } = req.query as Record<string, string>;
 
-  const niftyState = packState(redirect_uri || "", state || "");
+  // Nifty truncates long state params, so we only store the short claude state value.
+  // redirect_uri is logged here so we can confirm what Claude sends.
+  console.log("authorize redirect_uri:", redirect_uri, "state:", state);
+
+  // Sign only the claude state (short) — redirect_uri comes from the registered app config
+  const niftyState = jwt.sign({ s: state || "", r: redirect_uri || "" }, JWT_SECRET, { expiresIn: "10m", noTimestamp: false });
 
   const niftyAuthUrl = new URL("https://nifty.pm/authorize");
   niftyAuthUrl.searchParams.set("response_type", "code");
@@ -129,21 +109,26 @@ app.get("/oauth/callback", (req, res) => {
     return;
   }
 
-  const session = unpackState(packedState);
-  if (!session?.redirect_uri) {
-    res.status(400).send(`Authorization failed: invalid state. raw=${packedState}`);
+  let claudeRedirectUri = "";
+  let claudeState = "";
+  try {
+    const decoded = jwt.verify(packedState, JWT_SECRET) as { r: string; s: string };
+    claudeRedirectUri = decoded.r || "";
+    claudeState = decoded.s || "";
+  } catch {
+    res.status(400).send(`Authorization failed: invalid or expired state. raw=${packedState}`);
     return;
   }
 
-  if (!niftyToken) {
-    res.status(400).send("Authorization failed: missing code from Nifty.");
+  if (!niftyToken || !claudeRedirectUri) {
+    res.status(400).send(`Authorization failed: missing code or redirect_uri. uri=${claudeRedirectUri}`);
     return;
   }
 
   const code = jwt.sign({ niftyToken }, JWT_SECRET, { expiresIn: "5m" });
-  const url = new URL(session.redirect_uri);
+  const url = new URL(claudeRedirectUri);
   url.searchParams.set("code", code);
-  if (session.state) url.searchParams.set("state", session.state);
+  if (claudeState) url.searchParams.set("state", claudeState);
   res.redirect(url.toString());
 });
 
